@@ -1,0 +1,16 @@
+.venv/
+.ruff_cache/
+generated/
+models/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.ipynb_checkpoints/
+
+# probably ignore this unless you explicitly want data in the repo
+dataset/
+
+# OS junk
+.DS_Store
+Thumbs.db
