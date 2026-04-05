@@ -205,6 +205,8 @@ def _sample_command(args: argparse.Namespace) -> None:
             song_id=args.song_id,
             custom_song_id=args.custom_song_id,
             level_description=args.level_description,
+            min_objects_before_layout_end=args.min_objects_before_layout_end,
+            min_layout_tokens_before_layout_end=args.min_layout_tokens_before_layout_end,
         )
         level_name = str(sample_result.get("level_name", "Untitled"))
         level_description = str(
@@ -215,6 +217,9 @@ def _sample_command(args: argparse.Namespace) -> None:
         song_id = int(sample_result.get("song_id", 1))
         is_custom_song = bool(sample_result.get("is_custom_song", False))
         object_count = int(sample_result.get("object_count", 0))
+        valid_objects = int(sample_result.get("valid_objects", object_count))
+        attempted_objects = int(sample_result.get("attempted_objects", object_count))
+        custom_song_id = sample_result.get("custom_song_id")
         stop_reason = str(sample_result.get("stop_reason", "unknown"))
     else:
         level_name, level_description, song_id, is_custom_song = sample_level(
@@ -230,12 +235,17 @@ def _sample_command(args: argparse.Namespace) -> None:
             level_description=args.level_description,
         )
         object_count = -1
+        valid_objects = -1
+        attempted_objects = -1
+        custom_song_id = song_id if is_custom_song else None
         stop_reason = "diffusion_schedule_complete"
     _log("Sample command completed")
     print(
         f"Generated {args.out_path} "
         f"({_format_song_choice(song_id, is_custom_song)}, name='{level_name}', "
-        f"description='{level_description}', objects={object_count}, stop_reason={stop_reason})"
+        f"description='{level_description}', objects={object_count}, "
+        f"valid_objects={valid_objects}, attempted_objects={attempted_objects}, "
+        f"custom_song_id={custom_song_id}, stop_reason={stop_reason})"
     )
 
 
@@ -440,6 +450,8 @@ def build_parser() -> argparse.ArgumentParser:
     sample.add_argument("--sample-log-every-steps", type=int, default=0)
     sample.add_argument("--song-id", type=int)
     sample.add_argument("--custom-song-id", type=int)
+    sample.add_argument("--min-objects-before-layout-end", type=int, default=50)
+    sample.add_argument("--min-layout-tokens-before-layout-end", type=int, default=0)
     sample.set_defaults(func=_sample_command)
 
     dataset = sub.add_parser("dataset", help="Inspect dataset and state DB")

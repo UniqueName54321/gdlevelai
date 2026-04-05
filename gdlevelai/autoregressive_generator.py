@@ -37,7 +37,7 @@ DESC_START = "<desc>"
 DESC_END = "<edesc>"
 LAYOUT_START = "<layout>"
 LAYOUT_END = "<elayout>"
-ARTIFACT_SCHEMA_VERSION = 2
+ARTIFACT_SCHEMA_VERSION = 3
 
 
 def _log(message: str) -> None:
@@ -245,7 +245,6 @@ def _build_vocab(
         DESC_START,
         DESC_END,
         LAYOUT_START,
-        LAYOUT_END,
     }
     must_keep = {
         tok
@@ -884,6 +883,8 @@ def sample_autoregressive(
     song_id: int | None = None,
     custom_song_id: int | None = None,
     level_description: str | None = None,
+    min_objects_before_layout_end: int = 50,
+    min_layout_tokens_before_layout_end: int = 0,
 ) -> dict[str, object]:
     _log(
         f"Sampling autoregressive model from {model_path} "
@@ -926,6 +927,8 @@ def sample_autoregressive(
     desc_end_id = stoi.get(DESC_END)
     layout_start_id = stoi.get(LAYOUT_START)
     layout_end_id = stoi.get(LAYOUT_END)
+    obj_start_id = stoi.get(OBJ_START)
+    obj_end_id = stoi.get(OBJ_END)
     song_source_token_ids = _token_ids_with_prefix(stoi, "songsrc:")
     song_token_ids = _token_ids_with_prefix(stoi, "song:")
     custom_song_token_ids = _token_ids_with_prefix(stoi, "csong:")
@@ -954,6 +957,8 @@ def sample_autoregressive(
     model_song_id = 1
     model_is_custom_song = False
     stop_reason = "max_new_tokens"
+    valid_objects_emitted = 0
+    attempted_objects_emitted = 0
 
     with torch.no_grad():
 
@@ -1095,16 +1100,56 @@ def sample_autoregressive(
         if layout_start_id is not None:
             emit_next(generated_ids, forced_id=layout_start_id)
 
+        layout_end_min_valid_objects = max(50, min_objects_before_layout_end)
+        layout_tokens_emitted = 0
+        in_object = False
+        valid_objects_emitted = 0
+        attempted_objects_emitted = 0
+        object_has_id = False
+        object_has_x = False
+        object_has_y = False
+
         remaining_tokens = max(0, max_new_tokens - len(generated_ids))
         for _ in range(remaining_tokens):
-            idx = emit_next(generated_ids)
+            banned_extra: set[int] = set()
+            if layout_end_id is not None:
+                if layout_tokens_emitted < max(0, min_layout_tokens_before_layout_end):
+                    banned_extra.add(layout_end_id)
+                if valid_objects_emitted < layout_end_min_valid_objects:
+                    banned_extra.add(layout_end_id)
+                if in_object:
+                    banned_extra.add(layout_end_id)
+
+            idx = emit_next(generated_ids, banned_extra=banned_extra)
+
+            layout_tokens_emitted += 1
+            if obj_start_id is not None and idx == obj_start_id:
+                in_object = True
+                attempted_objects_emitted += 1
+                object_has_id = False
+                object_has_x = False
+                object_has_y = False
+            elif obj_end_id is not None and idx == obj_end_id:
+                if in_object and object_has_id and object_has_x and object_has_y:
+                    valid_objects_emitted += 1
+                in_object = False
+                object_has_id = False
+                object_has_x = False
+                object_has_y = False
+            elif in_object and 0 <= idx < len(itos):
+                tok = itos[idx]
+                if tok.startswith("id:"):
+                    object_has_id = True
+                elif tok.startswith("x:"):
+                    object_has_x = True
+                elif tok.startswith("y:"):
+                    object_has_y = True
 
             if layout_end_id is not None and idx == layout_end_id:
-                _log(f"Reached layout end at token {len(generated_ids)}")
                 stop_reason = "layout_end"
                 break
+
             if idx == eos_id and len(generated_ids) > max(0, min_tokens_before_eos):
-                _log(f"Reached EOS at token {len(generated_ids)}")
                 stop_reason = "eos"
                 break
 
@@ -1171,7 +1216,10 @@ def sample_autoregressive(
         "level_description": resolved_level_description,
         "song_id": resolved_song_id,
         "is_custom_song": resolved_is_custom_song,
+        "custom_song_id": resolved_song_id if resolved_is_custom_song else None,
         "object_count": len(objects),
+        "valid_objects": valid_objects_emitted,
+        "attempted_objects": attempted_objects_emitted,
         "stop_reason": stop_reason,
         "tokens_generated": len(generated_ids),
         "backend": runtime.backend,
